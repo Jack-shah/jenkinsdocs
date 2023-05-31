@@ -1,0 +1,25 @@
+name: "Jfrog CLI Example"
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: amd64/golang:latest
+    steps:
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v2
+        env:
+          JF_ARTIFACTORY_SERVER: ${{ secrets.JF_RT_TFSJF }}
+      - name: Checkout
+        uses: actions/checkout@v1
+      - name: Build
+        run: |
+          #setting maven repo
+          jfrog rt mvnc --server-id-deploy tfsjs --repo-deploy cenxg-maven-dev-local
+          # Build the code
+          jfrog rt mvn -B deploy --file pom.xml --build-name=montreal-app --build-number=1
+          # Add env vars
+          jfrog rt bce
+          # Add git info
+          jfrog rt bag
+          # Publish Build info
+          jfrog rt bp
