@@ -1,3 +1,6 @@
-FROM node:16-alpine
+FROM node:14.20.0-slim
 
-RUN apk update && apk upgrade && apk add -U git curl
+RUN npm install -g @angular/cli &&\
+    apt-get install git -y
+    
+    
