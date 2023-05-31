@@ -1,0 +1,15 @@
+Install JFrog CLI [brew install jfrog-cli]
+
+Once installed, use the following jfrog-cli commands to configure artifactory repo
+
+- jfrog config add (This will prompt for some info like Jfrog URL, username, password/api key)
+
+- Once config is done, you can test the config using
+jfrog rt ping (This should give 'OK')
+
+- You can also see the config using
+jfrog config show
+
+- The configuration can then be exported using the 'Server ID' that was provided in Step 2.1
+For example, if the "Server ID" was given as tfsjs then
+jfrog config export tfsjs (This will export the config as a base-64 which can then be stored as a secret in GitHub)
