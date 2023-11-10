@@ -1,0 +1,147 @@
+pipeline {
+    agent {
+        label 'windows'
+    }
+    
+    tools {
+        nodejs 'node1419'
+        jdk '44-jdk1708'
+    }
+    
+    stages {
+        stage ('Workspace Cleanup') {
+            //when{expression{2==3}}
+            steps {
+                cleanWs()
+            }
+        }
+        stage ('Checkout') {
+            //when{expression{2==3}}
+            steps {
+                configFileProvider([configFile(fileId: '4692441b-f0c2-4a12-a21d-c91d632a98ee', targetLocation: '.git-credentials')]) {
+                bat '''
+                copy .git-credentials %USERPROFILE%\\.git-credentials
+                git config --global credential.helper store
+                '''
+                echo 'Checking out Accuseq BackEnd'
+                checkout([$class: 'GitSCM', branches: [[name: '*/${branch_backend}']], extensions: [[$class: 'CloneOption', depth: 2, honorRefspec: true, noTags: true, reference: '', shallow: true, timeout: 10], [$class: 'CheckoutOption', timeout: 10], [$class: 'RelativeTargetDirectory', relativeTargetDir: 'accuseq-backend']], userRemoteConfigs: [[credentialsId: 'scmbuildmaster-github-pat', name: 'origin', refspec: '+refs/heads/${branch_backend}:refs/remotes/origin/${branch_backend}', url: 'https://github.com/thermofisher/PA-accuseq-backend.git']]])
+                echo 'Checking out Accuseq FrontEnd'
+                checkout([$class: 'GitSCM', branches: [[name: '*/${branch_frontend}']], extensions: [[$class: 'CloneOption', depth: 2, honorRefspec: true, noTags: true, reference: '', shallow: true, timeout: 10], [$class: 'CheckoutOption', timeout: 10], [$class: 'RelativeTargetDirectory', relativeTargetDir: 'accuseq-frontend']], userRemoteConfigs: [[credentialsId: 'scmbuildmaster-github-pat', name: 'origin', refspec: '+refs/heads/${branch_frontend}:refs/remotes/origin/${branch_frontend}', url: 'https://github.com/thermofisher/PA-accuseq-frontend.git']]])
+                echo 'Checking out Accuseq Installer'
+                checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: 'buildmaster-svn', depthOption: 'infinity', ignoreExternalsOption: true, local: '.\\installer', remote: 'https://svn.amer.thermo.com/scm/svn/SCM_Tools/${branch_installer}']], quietOperation: false, workspaceUpdater: [$class: 'UpdateUpdater']])
+                }
+            }
+        }
+        stage ('Artifactory configuration') {
+            //when{expression{2==3}}
+            steps {
+                rtMavenDeployer (
+                    id: "MAVEN_DEPLOYER",
+                    serverId: "jfrog",
+                    releaseRepo: "pharma-analytics-maven-dev",
+                    snapshotRepo: "pharma-analytics-maven-dev"
+                )
+                rtMavenResolver (
+
+                    id: "MAVEN_RESOLVER",
+                    serverId: "jfrog",
+                    releaseRepo: "pharma-analytics-maven-dev",
+                    snapshotRepo: "pharma-analytics-maven-dev"
+                )
+            }
+        }
+        stage ('Exec Maven') {
+            //when{expression{2==3}}
+            steps {
+                rtMavenRun (
+                    tool: 'mvn339',
+                    pom: 'accuseq-backend/pom.xml',
+                    goals: 'org.apache.maven.plugins:maven-install-plugin:2.3.1:install-file',
+                    opts: '-Dfile=.\\lib\\qpcr-oem-1.4.4.acq-all.jar -DgroupId=com.apldbio.qpcr -DartifactId=qpcr-oem -Dversion=1.4.4.acq-all -Dpackaging=jar',
+                    deployerId: "MAVEN_DEPLOYER",
+                    resolverId: "MAVEN_RESOLVER",
+                    buildName: 'pharma-analytics-accuseq-40'
+                )
+            }
+        }
+        stage ('Maven Package') {
+            steps {
+                rtMavenRun (
+                    tool: 'mvn339',
+                    pom: 'accuseq-backend/pom.xml',
+                    goals: '-X clean package -Ptest ',
+                    opts: '-Dmaven.test.skip=true',
+                    deployerId: "MAVEN_DEPLOYER",
+                    resolverId: "MAVEN_RESOLVER",
+                    buildName: 'pharma-analytics-accuseq-40'
+                )
+            }
+        }
+        stage ('NPM Install') {
+            steps {
+                bat '''
+                cd  accuseq-frontend/utilities/vue-tfc
+                call npm install && call npm install rimraf && call npm install cross-env && call npm install rollup && call npm run build && call npm link
+                cd ./../vue-qpcr
+                call npm link vue-tfc && call npm install && call npm link
+                cd ../../../accuseq-frontend
+                set buildDate=%date:~4%
+                set buildDate=%buildDate:/=%
+                set BUILDJSON={ "build_number" : "%branch_installer%_%BUILD_NUMBER%_%buildDate%" }
+                echo %BUILDJSON% > src/components/data/build.json 
+                npm install && npm link vue-tfc && npm run build
+                '''
+            }
+        }
+        stage ('Publish build info') {
+            steps {
+                rtPublishBuildInfo (
+                    serverId: "jfrog",
+                    buildName: 'pharma-analytics-accuseq-40'
+                )
+            }
+        }
+        stage ('Installer Build') {
+            steps {
+                bat '''
+                xcopy %WORKSPACE%\\accuseq-frontend\\dist "%WORKSPACE%\\Installer\\SupportFiles\\Tomcat 8.5\\webapps\\ROOT" /s /q /y
+                xcopy %WORKSPACE%\\accuseq-backend\\database %WORKSPACE%\\Installer\\SupportFiles\\PostgreSQL_Scripts /s /q /y
+                move /y %WORKSPACE%\\accuseq-backend\\sae-admin\\target\\sae-admin-0.0.1-SNAPSHOT.jar %WORKSPACE%\\Installer\\Dist\\sae-admin-0.0.1-SNAPSHOT.jar
+                move /y %WORKSPACE%\\accuseq-backend\\sae-manager\\target\\saeManager.war "%WORKSPACE%\\Installer\\SupportFiles\\Tomcat 8.5\\webapps\\saeManager.war"
+                move /y %WORKSPACE%\\accuseq-backend\\web\\target\\web.war "%WORKSPACE%\\Installer\\SupportFiles\\Tomcat 8.5\\webapps\\web.war"
+                
+                mkdir %WORKSPACE%\\Installer\\Dist\\properties
+                
+                copy /y "%WORKSPACE%\\accuseq-backend\\web\\src\\main\\resources\\application_build.properties" "%WORKSPACE%\\Installer\\Dist\\properties\\application.properties"
+                copy /y "%WORKSPACE%\\accuseq-backend\\sae-manager\\src\\main\\resources\\log4j_build.properties" "%WORKSPACE%\\Installer\\Dist\\properties\\log4j.properties"
+                
+                set ISBUILD="C:\\Program Files (x86)\\InstallShield\\2018 SAB\\System\\IsCmdBld.exe"
+                cd %WORKSPACE%\\Installer
+                %ISBUILD% -p AccuSEQ.ism
+                '''
+            }
+        }
+        stage ('Rename Installer') {
+            steps {
+                bat '''
+                cd "%WORKSPACE%\\installer\\Media\\Release 1\\Package"
+                set mydate=%date:~4%
+                set mydate=%mydate:/=%
+                set FILENAME=%branch_installer%_%BUILD_NUMBER%_%mydate%
+                "C:\\Program Files\\7-Zip\\7z.exe" a %FILENAME%.zip *.exe
+                '''
+            }
+        }
+    }
+    post {
+        always {
+            bat '''
+            git config --global --unset credential.helper
+            del /Q %USERPROFILE%\\.git-credentials
+            '''
+        }
+        success {
+            archiveArtifacts artifacts: 'installer\\Media\\Release 1\\Package\\*.zip', followSymlinks: false
+        }
+    }
+}
