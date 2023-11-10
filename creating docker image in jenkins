@@ -1,0 +1,18 @@
+def readpom
+
+pipeline {
+
+    agent any
+
+    stages {
+        stage ('Create docker image')  {
+            steps {
+                configFileProvider([configFile(fileId: "docker-image", variable: "MAVEN_SETTINGS")]) {
+                    sh "cat $MAVEN_SETTINGS > Dockerfile"
+                    sh "cat Dockerfile"
+                    sh 'docker build -t ca-alpine-node14176mvn384git242java8 . --network host'
+              }
+            }
+        }
+    }
+}
