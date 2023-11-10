@@ -1,0 +1,34 @@
+Define the conditions on each stages………… mean the particular stage can be run if condition is met
+
+pipeline{
+    agent any
+    stages{
+        stage('build'){
+            when{
+                expression{
+                    BRANCH_NAME == 'dev' && CODE_CHANGE == true // perform build action only when the branch name is dev and if there is code change"
+                }
+            }
+            steps{
+                echo "command  to be executed for build of the project"
+            }
+        }
+        stage('test'){
+            when{
+                expression{
+                    echo "some boolean expression"
+                    BRANCH_NAME == 'dev'  // when BRANCH_NAME(environment variable is equal dev , only then test will be performed)
+                }
+            }
+            steps{
+                echo "command  to be executed for test of the project"
+            }
+        }
+        stage('deploy'){
+            steps{
+                echo "command  to be executed for deploy of the project"
+            }
+        }
+    }
+}
+
