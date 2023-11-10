@@ -1,0 +1,187 @@
+//echo https://%UN%:%PASS%@ha-us.dso.thermofisher.net >> cred.txt
+import jenkins.model.Jenkins
+
+def now = new Date() //get currentDate
+
+def getLastSuccessful(jobName) {
+	assert jobName != null
+	return Jenkins.getInstance().getItemByFullName(jobName).lastSuccessfulBuild.number 
+}
+
+def getBuildTimeForABuild(jobName, buildNumber) {
+	assert jobName != null
+	assert buildNumber != null
+	return Jenkins.getInstance().getItemByFullName(jobName).getBuildByNumber(buildNumber).properties.time
+}
+
+pipeline {
+    agent {
+        label 'windows'
+    }
+    
+    environment {
+        def INST = "C:\\Program Files (x86)\\Inno Setup 6"
+        def UN = "saquib.mahfuz%40thermofisher.com"
+    }
+    
+    parameters {
+            //gitParameter branchFilter: 'origin/(.*)', description: 'Select the branch to be built', defaultValue: 'hid-one/AB_RHID_HIDOne_IL_1.0.0', name: 'BRANCH', quickFilterEnabled: false, selectedValue: 'NONE', sortMode: 'NONE', tagFilter: '*', type: 'PT_BRANCH'
+            string defaultValue: 'hid-one/AB_RHID_HIDOne_IL_1.0.0', description: 'Select the branch to be built', name: 'BRANCH', trim: true
+    }
+    
+    stages {
+        stage("clean up workspace"){
+            steps {
+              cleanWs()
+            }
+        }
+        //stage ('Build WorkflowDeployer') {
+          //  steps {
+              //  script {
+                  //  bn = getLastSuccessful('hid/H1-Plugin-WorkflowDeployer')
+                   // lsbt = getBuildTimeForABuild('hid/H1-Plugin-WorkflowDeployer', bn)
+                   // if (now - lsbt >= 2) {
+                   //     build 'H1-Plugin-WorkflowDeployer'
+                  //  }
+                  //  else {
+                      //  echo "H1-Plugin-WorkflowDeployer was built within 2 days henceforth skipping the build"
+                   // }
+               // }
+            //}
+        //}        
+        stage ('Build DanooGui') {
+            steps {
+                //script {
+                  //  bn = getLastSuccessful('hid/H1-Plugin-DannoGUI')
+                    //lsbt = getBuildTimeForABuild('hid/H1-Plugin-DannoGUI', bn)
+                   // if (now - lsbt >= 2) {
+                        build 'H1-Plugin-DannoGUI'
+                   // }
+                   // else {
+                    //    echo "H1-Plugin-DannoGUI was built within 2 days henceforth skipping the build"
+                  //  }
+                //}
+            }
+        }    
+        stage ('Build Fullrun') {
+            steps {
+                //script {
+                   // bn = getLastSuccessful('hid/H1-Plugin-FullRun')
+                   // lsbt = getBuildTimeForABuild('hid/H1-Plugin-FullRun', bn)
+                    //if (now - lsbt <= 2) {
+                        build 'H1-Plugin-FullRun'
+                    //}
+                    //else {
+                    //    echo "H1-Plugin-FullRun was built within 2 days henceforth skipping the build"
+                   // }
+                //}
+            }
+        }
+        stage ('Pre-Build Config') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: '	jfrog-saquib', passwordVariable: 'PASS', usernameVariable: 'US')]) {
+                    bat '''
+                    copy C:\\test\\.git-credentials %WORKSPACE%\\.git-credentials
+                    git init
+                    git config --local credential.https://ha-us.dso.thermofisher.net.helper store --file=%WORKSPACE%\\.git-credentials
+                    '''
+                }
+            }
+        }        
+        stage ('Clone') {
+            steps {
+                git branch: "${params.BRANCH}", credentialsId: 'github-pat', url: 'https://github.com/thermofisher/HRD-RapidHIT_ID_SWPackage.git'
+            }
+        }
+        stage ('Download from jFrog') {
+            steps {
+                rtDownload (
+                    buildName: 'hid-dannogui',
+                    serverId: "jfrog",
+                    spec:
+                        """{
+                            "files": [
+                               {
+                                    "pattern": "hid-maven-dev/com/thermo/hid/workflow-deployer/1.0.0/workflow-deployer-1.0.0.zip",
+                                    "target": "jfrog/workflow-deployer.zip",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-maven-dev/com/thermo/hid/fullrun/1.0.0/fullrun-1.0.0.zip",
+                                    "target": "jfrog/fullrun.zip",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-maven-dev/com/thermo/hid/dannogui/1.0.0/dannogui-1.0.0.zip",
+                                    "target": "jfrog/dannogui.zip",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-maven-dev/com/lifetech/hidone/HID-One-Investigative-Leads-Bundle/1.0.0-SNAPSHOT/HID-One-Investigative-Leads-Bundle-1.0.0-SNAPSHOT.zip",
+                                    "target": "jfrog/igbundle.zip",
+                                    "flat": true
+                                },
+                    
+                             {
+                                    "pattern": "hid-maven-dev/com/thermofisher/rapid-analysis-protocol/1.0-SNAPSHOT/rapid-analysis-protocol-1.0-SNAPSHOT.zip",
+                                    "target": "jfrog/rapid-analysis-protocol.zip",
+                                    "flat": true    
+                            },
+                            {
+                                    "pattern": "hid-maven-dev/com/thermofisher/rapid-analysis-pipeline/1.0-SNAPSHOT/rapid-analysis-pipeline-1.0-SNAPSHOT.zip",
+                                    "target": "jfrog/rapid-analysis-pipeline.zip",
+                                    "flat": true    
+                            }
+                            ]
+                        }"""
+                )
+            }
+        }
+        stage ('unZip the files') {
+            steps {
+                unzip zipFile: 'jfrog/dannogui.zip', dir: './AB_RHID_HIDOne/Upgrade/d/DannoGUI/'
+                unzip zipFile: 'jfrog/fullrun.zip', dir: 'jfrog/fullrun/'
+                //unzip zipFile: 'jfrog/workflow-deployer.zip', dir: './AB_RHID_HIDOne/Upgrade/d/workflow-deployer/'
+               // unzip zipFile: 'jfrog/igbundle.zip', dir: 'jfrog/igbundle'
+                unzip zipFile: 'jfrog/rapid-analysis-pipeline.zip', dir: 'jfrog/rapid-analysis-pipeline'
+                unzip zipFile: 'jfrog/rapid-analysis-protocol.zip', dir: 'jfrog/rapid-analysis-protocol'
+            }
+        }
+        stage ('copy files') {
+            steps {
+                bat 'xcopy /s /i /q /f /y jfrog\\fullrun\\V10 AB_RHID_HIDOne\\upgrade\\d\\fullrun\\V10.4\\V10'
+                bat 'xcopy /s /i /q /f /y jfrog\\rapid-analysis-pipeline AB_RHID_HIDOne\\upgrade\\d\\hid-one'
+                bat 'xcopy /s /i /q /f /y jfrog\\rapid-analysis-protocol AB_RHID_HIDOne\\upgrade\\d\\hid-one'
+                bat 'xcopy /s /i /q /f /y jfrog\\rapid-analysis-protocol AB_RHID_HIDOne\\upgrade\\d\\hid-one\\Backup\\Demo'
+                
+//                unzip zipFile: 'jfrog/igbundle/investigative-lead-1.0.0-SNAPSHOT.zip', dir: './AB_RHID_HIDOne/Upgrade/d/hid-one'
+//                unzip zipFile: './AB_RHID_HIDOne/Upgrade/d/hid-one/pipeline-1.0-SNAPSHOT.zip', dir: './AB_RHID_HIDOne/Upgrade/d/hid-one'
+//                bat 'del .\\AB_RHID_HIDOne\\Upgrade\\d\\hid-one\\pipeline-1.0-SNAPSHOT.zip'
+            }
+        }
+        stage ('Build Installer') {
+            steps {
+                bat "\"%INST%\"\\ISCC.exe %WORKSPACE%\\AB_RHID_HIDOne.iss"
+            }
+        }
+        stage ('Archive Artifacts') {
+            steps {
+                archiveArtifacts allowEmptyArchive: true, artifacts: "Output\\ABRHID v1.9.1.exe", followSymlinks: false, onlyIfSuccessful: true
+            }
+        }
+        stage ('Publish To S3') {
+            steps {
+                s3Upload consoleLogLevel: 'INFO', dontSetBuildResultOnFailure: false, dontWaitForConcurrentBuildCompletion: false, entries: [[bucket: 'installer-h1', excludedFile: '', flatten: true, gzipFiles: true, keepForever: true, managedArtifacts: true, noUploadOnFailure: true, selectedRegion: 'us-east-1', showDirectlyInBrowser: false, sourceFile: "Output\\*.exe", storageClass: 'STANDARD', uploadFromSlave: false, useServerSideEncryption: false]], pluginFailureResultConstraint: 'FAILURE', profileName: 's3Backup', userMetadata: []
+                //ABRHID v2.0.0 (InvestigativeLead v1.0.0)
+            }
+        }
+    }
+
+    post {
+        always {
+            dir ("jfrog") {
+                deleteDir()
+            }
+        }
+    }
+}
