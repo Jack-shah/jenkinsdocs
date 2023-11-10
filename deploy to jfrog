@@ -1,0 +1,105 @@
+def readpom
+
+pipeline {
+    agent { 
+        docker {
+            image 'alpine-node14176mvn384git242java8'
+            args "--network my_net"
+        }
+    }
+    
+    tools {
+        jfrog 'latest'
+    }
+
+    environment {
+        BUILD_NUMBER = currentBuild.number.toString()
+    }
+
+    parameters {
+        string(name: 'platformServerBranch', defaultValue: 'PS', description: 'PS is to be build')
+        string(name: 'jfrogUserName', defaultValue: 'chandan.ae@thermofisher.com', description: 'JFrog username')
+        string(name: 'jfrogPassword', defaultValue: 'AKCp8pRFFDpzicpCY3zu93LmFJJfcXDmFYUSkhVYKMWNx7nyZJeQsPNsat4idKe2ESEVogF8b', description: 'JFrog password')
+        booleanParam(name: 'Clean_Folder', defaultValue: false, description: 'Do you want to delete folder before release?')
+    }
+
+    stages {
+        stage ('Clear PS-source folder') {
+            when {
+                expression {
+                    params.cleanFolder == true
+                }
+            } 
+            steps {
+                sh 'rm -rf PS-source'
+            }
+        }
+        
+        stage('PS Code Checkout') {
+            steps {
+                    checkout([
+                        $class: 'SubversionSCM', 
+                        locations: [
+                            
+                            [
+                                credentialsId: 'buildmaster-svn',
+                                depthOption: 'infinity',
+                                ignoreExternalsOption: true,
+                                remote: 'https://svn.amer.thermo.com/scm/svn/aero/branches/abdul-aws-keyspace/fragment/fragmentce'
+                            ]
+                        ]
+                    ])
+                
+            }
+        }
+
+       stage('Build and deploy PS in JFROG') {
+            steps {
+                 dir('fragmentce'){
+                    script {
+                        readpom = readMavenPom file: 'pom.xml'
+                        pomversion = readpom.version
+                        echo " =============pom=============="
+                        echo "VERSION: ${pomversion}"
+                    }
+                    configFileProvider([configFile(fileId: 'jenkins-jfrog-gsdblrce-maven-global', variable: 'MAVEN_SETTINGS')]) {
+                        script {
+                            echo "VERSION: ${readpom.version}"
+                            try {
+                                sh "mvn -P PS -U -s \"$MAVEN_SETTINGS\" clean install -Dmaven.test.skip=true -Dmaven.repo.local=\"${WORKSPACE}/../Maven-local-repo/\""
+                            } catch(err) {
+                                echo "ERROR"
+                            }
+                            sh "echo =============done=============="
+                        }
+                    }
+                 }
+                }
+            }
+            stage('Deploy QC in JFROG') {
+          steps {
+              dir('fragmentce'){
+                configFileProvider([configFile(fileId: "jenkins-jfrog-gsdblrce-maven-global", variable: "MAVEN_SETTINGS")]) {
+                  script {
+                    try {
+                      sh "mvn -U -s $MAVEN_SETTINGS deploy -Dmaven.test.skip=true -Drelease -DbuildNumber=${BUILD_NUMBER} -DbuildUrl=${BUILD_URL} -DbuildName=gsd-blr-ce-fragmentce -DjfrogUserName=${params.jfrogUserName} -DjfrogPassword=${params.jfrogPassword} -Dmaven.repo.local=${WORKSPACE}/../Maven-local-repo/"
+                    }catch(err){
+                      echo "ERROR in deploying desktop"
+                    }
+                    sh "echo ============= Maven deployment done =============="
+                  }
+                }
+              }
+          }
+      }
+       stage('Archive MSA artifacts') {
+          steps {
+              dir('fragmentce'){
+                archiveArtifacts artifacts: 'single-web-app/target/*.jar'
+                archiveArtifacts artifacts: 'single-web-app/target/*.jar.original'
+              }
+          }
+      }
+        }
+    }
+
