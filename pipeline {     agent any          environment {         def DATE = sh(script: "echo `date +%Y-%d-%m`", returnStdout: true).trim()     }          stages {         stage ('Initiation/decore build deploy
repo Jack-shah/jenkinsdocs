@@ -1,0 +1,151 @@
+pipeline {
+    agent any
+
+    parameters{
+        string defaultValue: 'main', description: 'Branch to build ?', name: 'BRANCH_NAME', trim: true
+    }
+    triggers {
+        upstream(upstreamProjects: 'CT_Core_UI_PlugIn_Build', threshold: hudson.model.Result.SUCCESS) //build trigger
+    }
+    options {
+        //buildDiscarder(logRotator(daysToKeepStr: '10', numToKeepStr: '10'))
+        //timestamps()
+        copyArtifactPermission 'CT_Core_Installer,CT_Core_Custom_Installer'
+    }
+
+    stages {
+        stage('Setup') {
+            //when { expression { 2 == 3 } }
+            steps {
+                script {
+                  currentBuild.description = "Building Connect Transfer core artifacts. Both Front and Back end."
+                }
+            }
+        }
+        stage ('Workspace Cleanup') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage('Checkout') {
+            //when { expression { 2 == 3 } }
+            steps {
+                git branch: "${BRANCH_NAME}", url: 'https://github.com/thermofisher/dsbu-de-ctcore.git', credentialsId: 'scmbuildmaster-github-pat'
+            }
+        }
+        
+        stage('run mvn goal'){
+            //when { expression { 2 == 3 } }
+            agent {
+                docker { image 'saquibm6/alpine:node14151mvn354java17git28' 
+                    args '--network my_net'
+                    reuseNode true
+                }
+            }
+            steps {
+                // run bat command
+                  configFileProvider([configFile(fileId: 'ct-settings', variable: 'MAVEN_SETTINGS_XML')]) {
+                sh 'mvn -s $MAVEN_SETTINGS_XML clean deploy -DskipTests -f connect-transfer-parent/pom.xml'
+                sh 'mvn -s $MAVEN_SETTINGS_XML clean deploy -DskipTests -f connect-transfer-common/pom.xml'
+                sh 'mvn -s $MAVEN_SETTINGS_XML clean package -DskipTests -f pom.xml' 
+                  }
+            }
+        }
+        stage('npm commands'){
+            //when { expression { 2 == 3 } }
+            agent {
+                docker { image 'trion/ng-cli-karma:13.0.0' 
+                    args '--network my_net'
+                    reuseNode true
+                }
+            }
+            steps{
+                sh '''pwd
+                    cd UI   
+                    node -v
+                    npm cache clean --force
+                    npm install --force
+                    npm run ng build
+                    cd dist
+                    npm install --force '''
+            }
+        }
+        stage('connect-transfer-package-win'){
+            //when { expression { 2 == 3 } }
+            agent {
+                docker { image 'alpine/nodewine:v1'
+                    registryCredentialsId 'jfrog-saquib'
+                    registryUrl 'https://cenxg-docker-dev-local.ha-us.dso.thermofisher.net'
+                    args '--network my_net --entrypoint='
+                    reuseNode true
+                }
+            }
+            steps{
+                sh'''
+                pwd
+                cd UI
+                npm run connect-transfer-package-win'''
+            }
+        }
+        stage('zip command'){
+            //when { expression { 2 == 3 } }
+            agent {
+                docker { image 'javieraviles/zip' 
+                    args '--network my_net'
+                    reuseNode true
+                }
+            }
+            steps{
+                //execute sh commands
+                sh '''
+                cd UI/release-builds/ConnectTransfer-app-win32-x64/
+                zip -r UI.zip .
+                '''
+            }
+        }
+        stage('Copy Artifacts') {
+            //when { expression { 2 == 3 } }
+            agent {
+                docker { image 'javieraviles/zip' 
+                    args '--network my_net'
+                    reuseNode true
+                }
+            }
+            steps {
+                copyArtifacts fingerprintArtifacts: true, projectName: 'CT_Core_UI_PlugIn_Build', target: 'artifacts'
+            }
+        }
+        stage('Deploy to JFrog'){
+            //when { expression { 2 == 3 } }
+            agent {
+                docker { image 'saquibm6/alpine:node14151mvn354java17git28' 
+                    args '--network my_net'
+                    reuseNode true
+                }
+            }
+            steps {
+                configFileProvider([configFile(fileId: 'ct-settings', variable: 'MAVEN_SETTINGS_XML')]) {
+                    sh 'mvn -s $MAVEN_SETTINGS_XML clean deploy -f connect-transfer-parent/pom.xml -DperformRelease=true -Dmaven.javadoc.skip=true -Dmaven.test.skip=true'
+                    sh 'mvn -s $MAVEN_SETTINGS_XML clean deploy -f connect-transfer-common/pom.xml -DperformRelease=true -Dmaven.javadoc.skip=true -Dmaven.test.skip=true'
+                    sh 'mvn -s $MAVEN_SETTINGS_XML deploy -DperformRelease=true -Dmaven.javadoc.skip=true -Dmaven.test.skip=true'
+                }
+            }
+        }
+    }   
+    post {
+        success {
+            // Archive files
+            archiveArtifacts artifacts: '**/ConnectTransfer*.jar,**/connect-transfer-common*.jar, ApplicationDependencies/*/*.*,windowsInstallerDependencies/*.*,UI/release-builds/ConnectTransfer-app-win32-x64/UI.zip, EULA/*.*, src/main/resources/error_messages.properties, src/main/resources/user.properties,src/main/resources/system.properties,src/main/resources/quartz.properties,src/main/resources/*.*, artifacts/dist/generic/fesm2015/*.mjs, artifacts/dist/serial/fesm2015/*.mjs, artifacts/plugin files/Balance/NodeRED/Balance_Flow.json', followSymlinks: false
+        
+            emailext(
+                    to: 'pavithra.gopalan@thermofisher.com, premalatha.b@thermofisher.com, yashavantha.g@thermofisher.com, anil.kumar4@thermofisher.com,akhil.kotturi@thermofisher.com,raghava.chaitanya@thermofisher.com,,arindam.chattopadhyay@thermofisher.com,praveen.venugopal@thermofisher.com,ramya.a@thermofisher.com,sharil.pr@thermofisher.com,rajesh.vanga@thermofisher.com',
+                    replyTo: '$DEFAULT_REPLYTO',
+                    attachLog: false,
+                    mimeType: 'text/html',
+                    subject: '$DEFAULT_SUBJECT',
+                    body: '$DEFAULT_CONTENT'
+            )
+        }
+
+    }           
+}
