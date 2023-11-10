@@ -1,0 +1,142 @@
+pipeline {
+    agent { label 'windows' }
+    
+    environment {
+        CMDBUILD = "C:\\Program Files (x86)\\InstallShield\\2019 SAB\\System"
+        ISML = "%WORKSPACE%\\Installer\\Hid-One.ism"
+    }
+    
+    parameters {
+        string name: 'prSprint'
+        string name: 'prBuild' //defaultValue: "${test2}",
+        string name: 'pDate'
+        string name: 'pBn'
+    }
+    
+    stages {
+        stage ('values') {
+            when { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } }
+            steps {
+                bat '''
+                echo %prSprint%
+                echo %prBuild%
+                echo %pDate%
+                echo %pBn%
+                '''
+            }
+        }
+        stage ('WSClean') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage ('Checkout') {
+            steps {
+                git branch: '${BRANCH}', credentialsId: 'github-pat', url: 'https://github.com/thermofisher/HID-Platform.git'
+            }
+        }
+        stage ('Artifacts Download') {
+            steps {
+                rtDownload (
+                    serverId: "jfrog",
+                    spec:
+                        """{
+                            "files": [
+                                {
+                                    "pattern": "hid-maven-dev/com/thermofisher/gsd/platform/0.0.1-SNAPSHOT/platform-0.0.1-SNAPSHOT.war",
+                                    "target": "./installer/SupportFiles/apache-tomcat-9.0.46/webapps/platform.war",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-maven-dev/com/lifetech/converge/converge-router/1.0.0/converge-router-1.0.0.jar",
+                                    "target": "./jfrogDownload/route.jar",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-maven-dev/com/gsd/platform/eurekaserver/1.0.0-SNAPSHOT/eurekaserver-1.0.0-SNAPSHOT.war",
+                                    "target": "./installer/SupportFiles/apache-tomcat-9.0.46/webapps/eurekaserver.war",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-maven-dev/com/thermofisher/gsd/gateway/1.0.0-SNAPSHOT/gateway-1.0.0-SNAPSHOT.jar",
+                                    "target": "./installer/SupportFiles/gateway_jar/gateway.jar",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "hid-generic-dev/archives/converge/converge-*.zip",
+                                    "target": "./jfrogDownload/converge.zip",
+                                    "flat": true,
+                                    "sortBy": ["created", "name"],
+                                    "sortOrder": "desc",
+                                    "limit": 1
+                                },
+                                {
+                                    "pattern": "hid-generic-dev/electron-app/*/electron-app-win32-x64.zip",
+                                    "target": "installer/SupportFiles/electron-app-win32-x64/",
+                                    "flat": true,
+                                    "explode": true,
+                                    "sortBy": ["created", "name"],
+                                    "sortOrder": "desc",
+                                    "limit": 1
+                                }
+                            ]
+                        }"""
+                )
+                unzip dir: '.\\installer\\SupportFiles\\apache-tomcat-9.0.46\\webapps\\ui', glob: '', quiet: true, zipFile: './jfrogDownload/converge.zip'
+            }
+        }
+        stage ('PreReqs') {
+            steps {
+                bat '''
+                @echo off
+                dir %WORKSPACE%\\..
+                echo "Copying Support Files"
+                xcopy "platform\\database\\*.*" /s /i /q /f /y "installer\\SupportFiles\\DB"
+                '''
+            }
+        }
+        stage ('Build Installer-Release') {
+            when { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } }
+            steps {
+                bat '''
+                cd %CMDBUILD%
+                IsCmdBld.exe -p %ISML% -z "ProductName=RapidLINK v2.0: Sprint%prSprint%_Build%prBuild%_J%pBn%_%pDATE%"
+                '''
+            }
+        }
+        stage ('Build Installer-Dev') {
+            when { not { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } } }
+            steps {
+                bat '''
+                cd %CMDBUILD%
+                set LDATE=%date:~10,4%-%date:~7,2%-%date:~4,2%
+                IsCmdBld.exe -p %ISML% -z "ProductName=RapidLINK v2.0: J%BUILD_NUMBER%_%LDATE%"
+                '''
+            }
+        }
+        stage ('Rename Installer-Release') {
+            when { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } }
+            steps {
+                bat 'rename installer\\PC\\Rel1\\DiskImages\\DISK1\\Setup_HID.exe RapidLINK_v2.0_Sprint%prSprint%_Build%prBuild%_J%pBn%_%pDATE%.exe'
+            }
+        }
+        stage ('Rename Installer-DEV') {
+            when { not { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } } }
+            steps {
+                bat '''
+                set LDATE=%date:~10,4%-%date:~7,2%-%date:~4,2%
+                rename installer\\PC\\Rel1\\DiskImages\\DISK1\\Setup_HID.exe RapidLINK_v2.0_J%BUILD_NUMBER%_%LDATE%.exe
+                '''
+            }
+        }
+    }
+    post {
+        success {
+            echo "Archiving Artifacts"
+            archiveArtifacts artifacts: 'installer\\PC\\Rel1\\DiskImages\\DISK1\\*.exe', followSymlinks: false
+            
+            //echo "Publishing to S3"
+            //s3Upload consoleLogLevel: 'INFO', dontSetBuildResultOnFailure: false, dontWaitForConcurrentBuildCompletion: false, entries: [[bucket: 'installer-h1', excludedFile: '', flatten: false, gzipFiles: false, keepForever: false, managedArtifacts: true, noUploadOnFailure: true, selectedRegion: 'us-east-1', showDirectlyInBrowser: true, sourceFile: 'Installer\\PC\\Rel1\\DiskImages\\DISK1\\*.exe', storageClass: 'STANDARD', uploadFromSlave: false, useServerSideEncryption: false]], pluginFailureResultConstraint: 'FAILURE', profileName: 's3Backup', userMetadata: []
+        }
+    }
+}
