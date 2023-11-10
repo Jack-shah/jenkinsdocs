@@ -1,0 +1,119 @@
+import jenkins.model.Jenkins
+
+def getLastSuccessful(jobName) {
+	assert jobName != null
+	return Jenkins.getInstance().getItemByFullName(jobName).lastSuccessfulBuild.number 
+}
+
+def getBuildTimeForABuild(jobName, buildNumber) {
+	assert jobName != null
+	assert buildNumber != null
+	return Jenkins.getInstance().getItemByFullName(jobName).getBuildByNumber(buildNumber).properties.time
+}
+
+def differentialBuild(jobName) {
+    assert jobName != null
+    now = new Date()
+    bn = getLastSuccessful(jobName)
+    lsbt = getBuildTimeForABuild(jobName, bn)
+    if (now - lsbt >= 2) {
+        echo "Building ${jobName}"
+        build job: "${jobName}", propagate: true, wait: true
+    }
+    else {
+        echo "${jobName} was built within 2 days henceforth skipping the build"
+    }
+}
+
+pipeline {
+    agent {
+        docker {
+            image 'maven:3.8.3-openjdk-11-slim'
+            args '--network=my_net'
+        }
+    }
+    
+    environment {
+        JAVA_HOME = "/usr/local/openjdk-11/"
+        MAVEN_HOME = "/usr/share/maven"
+    }
+    
+    stages {
+        stage("clean up workspace"){
+            steps {
+              cleanWs()
+            }
+        }
+        
+        stage ('Building Dependencies') {
+            steps {
+                echo """
+                This job has built dependency on the following jobs, and in that order:
+                    1. HID-GMIDX-Algorithm
+                    2. H1-Plugin-ADCAD
+                    3. H1-Plugin-RuleEngine
+                    4. H1-Plugin-ILRuleManager
+                    
+                Building these jobs first...
+                ----------------------------------
+                """
+                build job: 'HID-GMIDX-Algorithm', propagate: true, wait: true
+                build job: 'H1-Plugin-ADCAD', propagate: true, wait: true
+                build job: 'H1-Plugin-RuleEngine', propagate: true, wait: true
+                build job: 'H1-Plugin-ILRuleManager', propagate: true, wait: true
+                //script {
+                //    differentialBuild('hid/HID-GMIDX-Algorithm')
+                //    differentialBuild('hid/H1-Plugin-ADCAD')
+                //    differentialBuild('hid/H1-Plugin-RuleEngine')
+                //    differentialBuild('hid/H1-Plugin-ILRuleManager')
+                //}
+            }
+        }
+        stage ('Clone') {
+            steps {
+                git branch: "${BRANCH}", credentialsId: 'scmbuildmaster-github-pat', url: 'https://github.com/thermofisher/HID-pipeline.git'
+            }
+        }
+        stage ('Artifactory configuration') {
+            steps {
+                rtMavenDeployer (
+                    id: "MAVEN_DEPLOYER",
+                    serverId: "jfrog",
+                    releaseRepo: "hid-maven-dev",
+                    snapshotRepo: "hid-maven-dev"
+                )
+                rtMavenResolver (
+
+                    id: "MAVEN_RESOLVER",
+                    serverId: "jfrog",
+                    releaseRepo: "hid-maven-dev",
+                    snapshotRepo: "hid-maven-dev"
+                )
+            }
+        }
+
+        stage ('Exec Maven') {
+            //when { changeset '*' }
+            steps {
+                rtMavenRun (
+                    pom: 'pom.xml',
+                    goals: 'install',
+                    opts: '-Dmaven.test.skip=true',
+                    deployerId: "MAVEN_DEPLOYER",
+                    buildName: 'hid-bundle-pipeline',
+                    resolverId: "MAVEN_RESOLVER"
+                )
+            }
+        }
+
+        stage ('Publish build info') {
+            //when { changeset '*' }
+            steps {
+                rtPublishBuildInfo (
+                    serverId: "jfrog",
+                    buildName: 'hid-bundle-pipeline'
+                )
+            }
+        }
+    }
+}
