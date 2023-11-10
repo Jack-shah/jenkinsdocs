@@ -1,0 +1,67 @@
+pipeline {
+    agent { label 'hid' }
+    //options {
+      //  buildDiscarder logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '', numToKeepStr: '15')
+    //}
+    tools {
+        ant 'Ant-1.8'
+        jdk '44-jdk8-32bit'
+    }
+    stages {
+        stage ('PreCheckout') {
+            steps {
+                configFileProvider([configFile(fileId: '4692441b-f0c2-4a12-a21d-c91d632a98ee', targetLocation: 'git-credential')]) {
+                    bat '''
+                    git lfs install
+                    copy git-credential %USERPROFILE%\\.git-credentials
+                    git config --global credential.helper store
+                    '''
+                }
+            }
+        }
+        stage ('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM', branches: [[name: '*/microseqid-v1.1_release']], extensions: [[$class: 'GitLFSPull']], userRemoteConfigs: [[credentialsId: 'scmbuildmaster-github-pat', url: 'https://github.com/thermofisher/PA-microseqid-v1.0.git']]])
+            }
+        }
+        stage ('Full Build') {
+            steps {
+                bat "ant -f \"SCM/MicroSEQ ID/SCMBuildscripts/build.xml\" -Djenkins.build=true -Dtools.dir=C:\\SCMTools -Dbuild.tools.home=C:\\SCMTools -Djunit.home=\"Third Party\\JUnit\" -Dbuild.full.home=${WORKSPACE} -Dant.prop=Build_Number-$BUILD_NUMBER-(OnDemand) SCM_build.full"
+            }
+        }
+        stage ('Push to JFrog') {
+            steps {
+                rtUpload (
+                    buildName: 'pharma-analytics-msid1.1-patch',
+                    serverId: "jfrog",
+                    spec:
+                    """{
+                        "files": [
+                            {
+                                "pattern": "Installers/MicroSeqID/MicroSeqID/MSID_Dist/AppMicroSeqID/MicroSeqID.jar",
+                                "target": "pharma-analytics-maven-dev/msid/MicroSeqID_v1_1/MicroSeqID.jar",
+                                "flat": true
+                            }
+                        ]
+                    }"""
+                )    
+            }
+        }
+    }
+    post {
+        success {
+            archiveArtifacts artifacts: 'Installers/MicroSeqID/MicroSeqID/MSID_Dist/AppMicroSeqID/MicroSeqID.jar', followSymlinks: false
+            
+            rtPublishBuildInfo (
+                serverId: "jfrog",
+                buildName: 'pharma-analytics-msid1.1-patch'
+            )
+        }
+        always {
+            bat '''
+            git config --global --unset credential.helper
+            del /Q %USERPROFILE%\\.git-credentials
+            '''
+        }
+    }
+}
