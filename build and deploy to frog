@@ -1,0 +1,104 @@
+def readpom
+
+pipeline {
+    agent { 
+        docker {
+            image 'pm-alpine-node14176mvn384git242java8'
+            args "--network my_net"
+        }
+    }
+    
+    tools {
+        jfrog 'latest'
+    }
+
+    environment {
+        BUILD_NUMBER = currentBuild.number.toString()
+    }
+
+    parameters {
+        string(name: 'platformServerBranch', defaultValue: 'MSA', description: 'MSA is to be build')
+        string(name: 'jfrogUserName', defaultValue: 'chandan.ae@thermofisher.com', description: 'JFrog username')
+        string(name: 'jfrogPassword', defaultValue: 'AKCp8pRFFDpzicpCY3zu93LmFJJfcXDmFYUSkhVYKMWNx7nyZJeQsPNsat4idKe2ESEVogF8b', description: 'JFrog password')
+        booleanParam(name: 'Clean_Folder', defaultValue: false, description: 'Do you want to delete folder before release?')
+    }
+
+    stages {
+        stage ('Clear MSA-source folder') {
+            when {
+                expression {
+                    params.cleanFolder == true
+                }
+            } 
+            steps {
+                sh 'rm -rf MSA-source'
+            }
+        }
+        
+        stage('MSA Code Checkout') {
+            steps {
+                    checkout([
+                        $class: 'SubversionSCM', 
+                        locations: [
+                            
+                            [
+                                credentialsId: 'buildmaster-svn',
+                                depthOption: 'infinity',
+                                ignoreExternalsOption: true,
+                                remote: 'https://svn.amer.thermo.com/scm/svn/aero/branches/abdul-aws-keyspace/fragment/fragmentce'
+                            ]
+                        ]
+                    ])
+                
+            }
+        }
+
+        stage('Build and deploy MSA in JFROG') {
+            steps {
+                dir('fragmentce/microsatellites'){
+                    script {
+                        readpom = readMavenPom file: 'pom.xml'
+                        pomversion = readpom.version
+                        echo " =============pom=============="
+                        echo "VERSION: ${pomversion}"
+                    }
+                    configFileProvider([configFile(fileId: 'jenkins-jfrog-gsdblrce-maven-global', variable: 'MAVEN_SETTINGS')]) {
+                        script {
+                            echo "VERSION: ${readpom.version}"
+                            try {
+                                sh "mvn -P MSA -U -s $MAVEN_SETTINGS clean install -Dmaven.test.skip=true -Dmaven.repo.local=${WORKSPACE}/../Maven-local-repo/"
+                            } catch(err) {
+                                echo "ERROR"
+                            }
+                            sh "echo =============done=============="
+                        }
+                    }
+                }
+                }
+            }
+            stage('Deploy MSA in JFROG') {
+          steps {
+              dir('fragmentce/microsatellites'){
+                configFileProvider([configFile(fileId: "jenkins-jfrog-gsdblrce-maven-global", variable: "MAVEN_SETTINGS")]) {
+                  script {
+                    try {
+                      sh "mvn -U -s $MAVEN_SETTINGS deploy -Dmaven.test.skip=true -Drelease -DbuildNumber=${BUILD_NUMBER} -DbuildUrl=${BUILD_URL} -DbuildName=gsd-blr-ce-microsatellites -DjfrogUserName=${params.jfrogUserName} -DjfrogPassword=${params.jfrogPassword} -Dmaven.repo.local=${WORKSPACE}/../Maven-local-repo/"
+                    }catch(err){
+                      echo "ERROR in deploying desktop"
+                    }
+                    sh "echo ============= Maven deployment done =============="
+                  }
+                }
+              }
+          }
+      }
+      stage('Archive MSA artifacts') {
+          steps {
+              dir('fragmentce/microsatellites'){
+                archiveArtifacts artifacts: 'microsatellite-app/target/*.jar'
+                archiveArtifacts artifacts: 'microsatellite-app/target/*.jar.original'
+              }
+          }
+      }
+        }
+    }
