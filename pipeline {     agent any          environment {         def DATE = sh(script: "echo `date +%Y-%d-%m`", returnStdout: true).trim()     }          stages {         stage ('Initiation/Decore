@@ -1,0 +1,84 @@
+pipeline {
+    agent any
+      //docker {
+        //image 'saquibm6/nodemavengit:alpinev1'
+        //args '--network my_net -v ${WORKSPACE}/tmp:/tmp'
+      //}
+    //}
+    parameters{
+        gitParameter(name: 'BRANCH_NAME',type: 'BRANCH',defaultValue:'origin/main',description: 'Choose the branch to build your code',branchFilter: '.*',tagFilter: '*')
+        //choice(name :'BRANCH_NAME', choices:['origin/main'],description:'Choose the branch to build your code')
+        //Git Parameter Plug-In
+    }
+    //triggers {
+        //upstream(upstreamProjects: 'CT_Core_Build_JDK17', threshold: 'SUCCESS')
+    //}
+    //options {
+        //buildDiscarder(logRotator(daysToKeepStr: '10', numToKeepStr: '10'))
+        //timestamps()
+        //copyArtifactPermission 'CT_Core_Installer'
+    //}
+
+    stages {
+        stage('Job Description') {
+            steps {
+                script {
+                    currentBuild.description = "Building Connect Transfer core artifacts. Both Front and Back end."
+                }
+            }
+        }
+        stage('Checkout') {
+            //when{expression{2==3}}
+            steps {
+                cleanWs()
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "${BRANCH_NAME}"]],
+                    extensions: [],
+                    userRemoteConfigs: [[credentialsId: 'scmbuildmaster-github-pat', url: 'https://github.com/thermofisher/dsbu-de-ctcore.git']]
+                ])
+            }
+        }
+        stage('execute npm commands') {
+            //when{expression{2==3}}
+            agent {
+                docker {
+                    image 'trion/ng-cli-karma:13.0.0'
+                    args '--network my_net'
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    pwd
+                    cd UI
+                    node -v
+                    npm cache clean --force
+                    npm install --force
+                    npm run ng build
+                    cd dist
+                    npm install --force
+                '''
+            }
+        }
+        stage('connect-transfer-package-win') {
+            //when {expression {2 == 3}}
+            agent {
+                docker {
+                    image 'alpine/nodewine:v1'
+                    registryCredentialsId 'jfrog-saquib'
+                    registryUrl 'https://cenxg-docker-dev-local.ha-us.dso.thermofisher.net'
+                    args '--network my_net --entrypoint='
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    pwd
+                    cd UI
+                    npm run connect-transfer-package-win
+                '''
+            }
+        }
+    }
+}
