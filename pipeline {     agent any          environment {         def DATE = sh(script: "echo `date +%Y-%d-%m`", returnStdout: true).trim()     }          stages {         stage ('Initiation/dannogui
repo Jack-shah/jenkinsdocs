@@ -1,0 +1,90 @@
+pipeline {
+    agent any
+    
+    environment {
+        def DATE = sh(script: "echo `date +%Y-%d-%m`", returnStdout: true).trim()
+    }
+    
+    stages {
+        stage ('Initiation/Basic Build') {
+            steps {
+                echo "\"HID-Main-Build\" is the primary job that needs to be built for any other job to work and this is built nightly."
+                echo "The 'HID-One-Installer' has no dependency but only the Main-Build since the components from Main Build are used within the Installer."
+            }
+        }
+        stage ('Dependencies') {
+            steps {
+                echo '''
+                This job will build the following jobs and in this order only. It also shows the dependency job which will be triggered along.
+                    H1-Artifacts-Main-Build
+                    HID-Utility-App
+                    H1-Platform-Installer-Build
+                    HID-One-Investigative-Leads-Plugin-Bundle
+	                    HID-Bundle-Pipeline
+		                    HID-GMIDX-Algorithm
+		                    H1-Plugin-ADCAD
+		                    H1-Plugin-RuleEngine
+		                    H1-Plugin-ILRuleManager
+	                    HID-One-Plugins
+	                   
+                    H1-Instrument-Installer-DannoGUI
+	                    H1-Plugin-DannoGUI
+	                    H1-Plugin-FullRun
+	                     
+                '''
+            }
+        }
+        
+        stage ('Executors') {
+            steps {
+                echo '''
+                Since these jobs would be concurrent meaning the parent will hold one executor while the upstraem dependent jobs are built.
+                So for this a total of 5 executors would be utilized completely blocking every other build while this job is running.
+                '''
+            }
+        }
+        stage ('values') {
+            steps {
+                sh '''
+                echo $pSprint
+                echo $pBuild
+                echo $pProfile
+                echo $DATE
+                echo $BUILD_NUMBER
+                '''
+            }
+        }
+        stage ('Building the Main Build') {
+                steps {
+                    catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                        build job: 'H1-Artifacts-Main-Build', parameters: [string(name: 'branch', value: "dr-know-release"), string(name: 'prSprint', value: "${params.pSprint}"), string(name: 'prBuild', value: "${params.pBuild}"), string(name: 'pDate', value: String.valueOf(DATE)), string(name: 'pBn', value: "${BUILD_NUMBER}"),string(name: 'prProfile', value: "${params.pProfile}")]
+                    }
+                }
+        }
+        stage ('Building bundle and Installers') {
+            stages {
+                stage ('Creating HID-One Installer') {
+                    steps {
+                        build job: 'H1-Platform-Installer-Build', propagate: true, wait: true, parameters: [string(name: 'prSprint', value: "${params.pSprint}"), string(name: 'prBuild', value: "${params.pBuild}"), string(name: 'pDate', value: String.valueOf(DATE)), string(name: 'pBn', value: "${BUILD_NUMBER}")]
+                    }
+                }
+                stage ('Build Investigave Lead Bundle') {
+                    steps {
+                        build job: 'HID-One-Investigative-Leads-Plugin-Bundle', parameters: [string(name: 'prSprint', value: "${params.pSprint}"), string(name: 'prBuild', value: "${params.pBuild}"), string(name: 'pDate', value: String.valueOf(DATE)), string(name: 'pBn', value: "${BUILD_NUMBER}")]
+                    }
+                }
+                stage ('Creating DannoGui Installer') {
+                    steps {
+                        build job: 'H1-Instrument-Installer-DannoGUI', propagate: true, wait: true, parameters: [string(name: 'prSprint', value: "${params.pSprint}"), string(name: 'prBuild', value: "${params.pBuild}"), string(name: 'pDate', value: String.valueOf(DATE)), string(name: 'pBn', value: "${BUILD_NUMBER}")]
+                    }
+                }
+            }
+        }
+        
+        stage ('Finalising the job') {
+            steps {
+                echo "All jobs are built successfully."
+            }
+        }
+    }
+}
