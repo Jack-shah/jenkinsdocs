@@ -1,0 +1,69 @@
+pipeline {
+   agent {
+        docker {
+            image 'androidsdk/android:28'
+            args '--network my_net'
+        }
+    }
+    
+    options {
+        buildDiscarder logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '5', daysToKeepStr: '', numToKeepStr: '10')
+        copyArtifactPermission '*'
+        disableConcurrentBuilds abortPrevious: true
+       // timestamps
+        //dockerNode(connector: attach(javaExe: '/usr/lib/jvm/java-11-openjdk/bin/java'), image: 'saquibm6/nodemavengit:alpinev1')
+    }
+  
+  parameters {
+    string defaultValue: "1.2.4.${BUILD_NUMBER}", description: 'New version number, if any', name: 'VERSION', trim: true
+    string defaultValue: '*/master', name: 'LIBRARY_BRANCH', trim: true
+    string defaultValue: '*/master', name: 'MONARCH_BRANCH', trim: true
+    string defaultValue: 'refs/heads/SeqStudio_1.2.4', description: '''Common options:
+    <branchName>
+    refs/heads/<branchName>
+    <remoteRepoName>/<branchName>
+    refs/tags/<tagName>
+    <commitId>''', name: 'FRAMEWORK_BRANCH', trim: true
+  }
+    
+//    triggers {
+//        pollSCM 'H 4 * * *'
+//    }
+
+    stages {
+        stage ('Checkout') {
+            steps {
+              checkout([$class: 'GitSCM', branches: [[name: '${FRAMEWORK_BRANCH}']], extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'instrumentserver-framework']], userRemoteConfigs: [[credentialsId: 'github-pat', url: 'https://github.com/thermofisher/instrumentserver-framework.git']]])
+              checkout([$class: 'GitSCM', branches: [[name: '${LIBRARY_BRANCH}']], extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'instrumentserver-library']], userRemoteConfigs: [[credentialsId: 'github-pat', url: 'https://github.com/thermofisher/instrumentserver-library.git']]])
+              checkout([$class: 'GitSCM', branches: [[name: '${MONARCH_BRANCH}']], extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'instrumentserver-monarch']], userRemoteConfigs: [[credentialsId: 'github-pat', url: 'https://github.com/thermofisher/instrumentserver-monarch.git']]])
+            }
+        }
+        stage ('Build from Shell') {
+            steps {
+                sh '''
+                #!/bin/bash
+                rm -rf *.tar.gz SCPI
+                cd "instrumentserver-monarch"
+                ./makedist.sh -symlink="instrumentserver-seqstudio.tar.gz" -build="${BUILD_NUMBER}" "${VERSION}"
+            
+                ############Next Shell Steps###################
+                cd $WORKSPACE
+                echo "Generating SCPI documentation"
+                echo "$(pwd)"
+                port=7009
+                "./instrumentserver-monarch/instrument.py" --fork -p ${port} -t 0
+                "./instrumentserver-framework/Tools/scpiDocumentGenerator.py" -d "SCPI" -p ${port}
+              "./instrumentserver-monarch/instrument.py" --shutdown -p ${port}
+                tar zcf "scpi-reference-${VERSION}.tar.gz" SCPI
+                '''
+            }
+        }
+    }
+    post {
+        success {
+          archiveArtifacts artifacts: '**/*.tar.gz', followSymlinks: false
+        //  currentBuildInfo.description = "Version <Creating: .* \-version=\'\\'(\S+)\'\\'>"
+        //  currentBuild.description = "Version <Creating: .* \-version=\'(\S+)\'>" //Need to find a way to perform this with with Regex
+        }
+    }
+}
