@@ -1,0 +1,158 @@
+pipeline {
+    agent {
+        docker {
+            image 'saquibm6/alpine:node14151mvn354java11git28'
+            args '--network my_net'
+        }
+    }
+    
+    parameters {
+        string name: 'prSprint'
+        string name: 'prBuild' //defaultValue: "${test2}",
+        string name: 'prProfile' 
+        string name: 'pDate'
+        string name: 'pBn'
+    }
+    
+    environment {
+        JAVA_HOME = "/usr/lib/jvm/java-11-openjdk/"
+        MAVEN_HOME = "/usr/lib/mvn"
+        //npm_config_cache = "/home/node/"
+        //npm_config_prefix = "/home/node/node_modules"
+        //PATH="/home/node/node_modules/bin:$PATH"
+    }
+    
+    stages {
+        stage ('values') {
+            when { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } }
+            steps {
+                sh '''
+                echo $prSprint
+                echo $prBuild
+                echo $prProfile
+                echo $pDate
+                echo $pBn
+                '''
+            }
+        }
+        stage ('NPM PreReqs') {
+            when { expression { 2 == 3 } }
+            steps {
+                sh '''
+                npm install yalc -g && npm config list && echo $PATH
+                '''
+            }
+        }
+        stage ('workspaceCleanup') {
+            //when { expression { 2 == 3 } } //skipping this stage, remove the when block to run this stage
+            steps {
+                cleanWs()
+            }
+        }
+        stage ('Clone') {
+            //when { expression { 2 == 3 } }
+            steps {
+                git branch: "$branch", credentialsId: 'scmbuildmaster-github-pat', url: 'https://github.com/thermofisher/HID-Platform.git'
+            }
+        }
+        stage ('Artifactory configuration') {
+            steps {
+                rtMavenDeployer (
+                    id: "MAVEN_DEPLOYER",
+                    serverId: "jfrog",
+                    releaseRepo: "hid-maven-dev",
+                    snapshotRepo: "hid-maven-dev"
+                )
+                rtMavenResolver (
+                    id: "MAVEN_RESOLVER",
+                    serverId: "jfrog",
+                    releaseRepo: "hid-maven-dev",
+                    snapshotRepo: "hid-maven-dev"
+                )
+                rtNpmDeployer (
+                    id: "NPM_DEPLOYER",
+                    serverId: "jfrog",
+                    repo: "hid-npm-dev"
+                )
+            }
+        } 
+        stage ('Remove DB License Manger') {
+            when { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' && params.prProfile == 'prod' } }
+            steps {
+                sh '''
+                rm -f modules/license-module/license-core/src/main/java/com/thermofisher/gsd/platform/license/DBLicenseManager.java
+                echo "Deleted DB License manager..."
+                '''
+            }
+        }
+        stage ('Update Release Version') {
+            when { expression { currentBuild.getBuildCauses()[0].upstreamUrl == 'job/hid/job/HID-Web-Build/' } }
+            steps {
+                sh '''
+                sed -i "s/{{gitDetails}}/RapidLINK 2.0-Sprint$prSprint-Build$prBuild-J$pBn-$pDate/g" ui/projects/app-common/src/lib/components/about-app-dialog/about-app-dialog.template.html
+                cat ui/projects/app-common/src/lib/components/about-app-dialog/about-app-dialog.template.html
+                '''
+            }
+        }
+        stage ('Update app-common package version') {
+            steps {
+                sh '''
+                sed -i "s/SNAPSHOT/SNAPSHOT.$BUILD_NUMBER/g" ui/projects/app-common/package.json
+                '''
+            }
+        }
+        stage ('Exec Maven') {
+            //when { expression { 2 == 3 } } //skipping this stage, remove the when block to run this stage
+            steps {
+                configFileProvider([configFile(fileId: 'npmrc-jfrog', targetLocation: './.npmrc')]) {
+                sh 'cp .npmrc /home/node/.npmrc'
+                rtMavenRun (
+                    pom: 'pom.xml',
+                    goals: 'clean install -U -P !seed-database',
+                    opts: "-Dmaven.test.skip=true",
+                    deployerId: "MAVEN_DEPLOYER",
+                    resolverId: "MAVEN_RESOLVER",
+                    buildName: 'hid-main-build'
+                )
+                }
+            }
+        }
+        stage ('Npm Publish') {
+            when { expression { 2 == 3 } }
+            steps {
+                rtNpmPublish ( buildName: 'hid-main-build', path: 'ui/dist/app-common', deployerId: 'NPM_DEPLOYER' )
+            }
+        }
+        stage ('Zip and Push converge') {
+            //when { expression { 2 == 3 } }
+            steps {
+                zip dir: './ui/dist/converge', exclude: '', glob: '', overwrite: true, zipFile: 'converge.zip'
+                rtUpload (
+                    serverId: "jfrog",
+                    buildName: 'hid-main-build',
+                    spec:
+                        """{
+                            "files": [
+                                {
+                                    "pattern": "converge.zip",
+                                    "target": "hid-generic-dev/archives/converge/converge-${BUILD_NUMBER}.zip",
+                                    "flat": true
+                                }
+                            ]
+                        }"""
+                )
+            }
+        }
+        stage ('Publish build info') {
+            //when { expression { 2 == 3 } }
+            steps {
+                rtPublishBuildInfo (
+                    serverId: "jfrog",
+                    buildName: 'hid-main-build'
+                )
+            }
+        }
+    }
+}
+
+// -Dmaven.repo.local=$WORKSPACE/.m2/repository/rel30
